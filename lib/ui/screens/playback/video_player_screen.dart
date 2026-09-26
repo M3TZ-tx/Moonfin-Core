@@ -76,6 +76,9 @@ import '../../widgets/track_selector_dialog.dart';
 import '../../widgets/playback/player_loading_overlay.dart';
 import '../../widgets/playback/loading_animation_widget.dart';
 import '../../widgets/playback/chapter_marker_track.dart';
+import '../../widgets/playback/bookmark_marker_track.dart';
+import 'bookmark_manager_dialog.dart';
+import '../../../playback/playback_bookmark_repository.dart';
 import '../../widgets/playback/skip_segment_overlay.dart';
 import '../../widgets/playback/next_up_overlay.dart';
 import '../../widgets/playback/still_watching_dialog.dart';
@@ -2439,6 +2442,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
     _refreshTrickplayIfNeeded();
     _refreshCastPeopleIfNeeded();
+    _refreshBookmarkMarkersIfNeeded();
     _handleTrickplayAmbientPrefetch(position);
     _syncAirPlayPlaybackState(position: position);
     if (PlatformDetection.isIOS) {
@@ -3920,6 +3924,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           _showControls();
         }
         return KeyEventResult.handled;
+      case PlayerAction.bookmark:
+        _showBookmarks();
+        return KeyEventResult.handled;
     }
   }
 
@@ -5096,6 +5103,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                                         : const [],
                                     durationMs: duration.inMilliseconds,
                                   ),
+                                  BookmarkMarkerTrack(
+                                    positionsMs: _bookmarkPositionsMs,
+                                    durationMs: duration.inMilliseconds,
+                                  ),
                                 ],
                               ),
                             ),
@@ -5696,6 +5707,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               size: secondaryIconSize,
               extent: secondaryExtent,
               tooltip: l10n.chapters,
+            ),
+          if (shows(OsdButton.bookmarks))
+            OsdButton.bookmarks: _controlButton(
+              Icons.bookmark_add_outlined,
+              onPressed: _showBookmarks,
+              size: secondaryIconSize,
+              extent: secondaryExtent,
+              tooltip: l10n.localeName.startsWith('ar') ? 'العلامات المرجعية (B)' : 'Bookmarks (B)',
             ),
           if (showSubtitleButton && shows(OsdButton.subtitles))
             OsdButton.subtitles: _controlButton(
@@ -7358,6 +7377,54 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _suppressSeekPrompts();
       _seekDirect(Duration(microseconds: ticks ~/ 10));
     }());
+    _showControls();
+  }
+
+  List<int> _bookmarkPositionsMs = const [];
+  String? _bookmarksLoadedForItemId;
+
+  void _refreshBookmarkMarkersIfNeeded() {
+    final item = _queue.currentItem;
+    if (item is! AggregatedItem) return;
+    if (item.id == _bookmarksLoadedForItemId) return;
+    _bookmarksLoadedForItemId = item.id;
+    unawaited(_loadBookmarkMarkers(item));
+  }
+
+  Future<void> _loadBookmarkMarkers(AggregatedItem item) async {
+    final bookmarks = await PlaybackBookmarkRepository.instance.load(
+      item.serverId,
+      item.id,
+      itemName: item.name,
+    );
+    if (!mounted || _queue.currentItem?.id != item.id) return;
+    setState(() {
+      _bookmarkPositionsMs = bookmarks
+          .map((b) => b.positionMs)
+          .toList(growable: false);
+    });
+  }
+
+  void _showBookmarks() {
+    final item = _queue.currentItem;
+    if (item is! AggregatedItem) return;
+    unawaited(
+      BookmarkManagerDialog.show(
+        context,
+        serverId: item.serverId,
+        itemId: item.id,
+        itemName: item.name,
+        initialPosition: _state.position,
+        duration: _state.duration,
+        onJumpTo: (target) {
+          _suppressSeekPrompts();
+          unawaited(_seekDirect(target));
+        },
+      ).then((_) {
+        if (!mounted) return;
+        unawaited(_loadBookmarkMarkers(item));
+      }),
+    );
     _showControls();
   }
 
